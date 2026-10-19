@@ -1,4 +1,6 @@
 """FastAPI entry point:  uvicorn app.main:app --reload   (run from backend/)"""
+import asyncio
+import json
 import logging
 import threading
 from contextlib import asynccontextmanager
@@ -13,7 +15,10 @@ from app.database.factory import create_repository
 from app.prediction.engine import ENGINE_VERSION, PredictionEngine
 from app.services.errors import ServiceError
 from app.services.predictor_service import PredictorService
+from app.sync.service import SyncService
+from app.sync.sources import HttpJsonSource
 
+logging.basicConfig(level=get_settings().log_level, format="%(asctime)s level=%(levelname)s logger=%(name)s msg=%(message)s")
 log = logging.getLogger("wingo")
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
 
@@ -31,7 +36,14 @@ async def lifespan(app: FastAPI):
     last = repo.last_result()
     if s.auto_backtest and last and last["seq"] > s.min_history + 50 and repo.latest_backtest() is None:
         threading.Thread(target=service.run_backtest, daemon=True).start()     # ~1-2 min, results appear when done
+    source = HttpJsonSource(s.sync_source_url, s.sync_list_path, s.sync_period_field, s.sync_number_field, s.sync_time_field,
+                            json.loads(s.sync_headers_json) if s.sync_headers_json else {}, respect_robots=s.sync_respect_robots)
+    sync = SyncService(service, source, s.sync_enabled, s.sync_interval, stale_after=s.sync_stale_after, allow_gaps=s.sync_allow_gaps, start_after=s.sync_start_after_period)
+    app.state.sync = sync
+    task = asyncio.create_task(sync.run_forever()) if s.sync_enabled else None     # no browser needed: runs on the server
     yield
+    if task:
+        task.cancel()
 
 
 app = FastAPI(title="WinGo Analysis Platform", version=ENGINE_VERSION, lifespan=lifespan,
