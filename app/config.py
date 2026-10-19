@@ -28,6 +28,21 @@ class Settings:
     refit_every: int = int(os.getenv("MODEL_REFIT_EVERY", "10"))
     min_history: int = int(os.getenv("MIN_HISTORY", "100"))
     min_validation_n: int = int(os.getenv("MIN_VALIDATION_N", "300"))
+    # live sync: OFF unless you configure a data source you are allowed to use
+    ui_poll_seconds: float = max(10.0, float(os.getenv("UI_POLL_SECONDS", "30")))
+    log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
+    sync_stale_after: float = float(os.getenv("SYNC_STALE_AFTER_SECONDS", "300"))
+    sync_enabled: bool = os.getenv("SYNC_ENABLED", "false").lower() == "true"
+    sync_interval: float = float(os.getenv("SYNC_INTERVAL_SECONDS", "30"))
+    sync_source_url: str = os.getenv("SYNC_SOURCE_URL", "")
+    sync_list_path: str = os.getenv("SYNC_LIST_PATH", "")
+    sync_period_field: str = os.getenv("SYNC_PERIOD_FIELD", "")
+    sync_number_field: str = os.getenv("SYNC_NUMBER_FIELD", "")
+    sync_time_field: str = os.getenv("SYNC_TIME_FIELD", "")
+    sync_headers_json: str = os.getenv("SYNC_HEADERS_JSON", "")
+    sync_respect_robots: bool = os.getenv("SYNC_RESPECT_ROBOTS", "true").lower() == "true"
+    sync_allow_gaps: bool = os.getenv("SYNC_ALLOW_GAPS", "false").lower() == "true"
+    sync_start_after_period: str = os.getenv("SYNC_START_AFTER_PERIOD", "")
 
 
 def get_settings() -> Settings:
