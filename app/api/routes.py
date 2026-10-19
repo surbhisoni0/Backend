@@ -55,6 +55,37 @@ async def import_paste(request: Request, newest_first: bool = Query(False, descr
     return await run_in_threadpool(svc(request).import_paste, raw.decode("utf-8-sig", errors="replace"), newest_first)
 
 
+@router.get("/health")
+def health(request: Request):
+    """Liveness/readiness for the hosting platform. 503 only when the database is unreachable."""
+    from fastapi.responses import JSONResponse
+    from app.health import build_health
+    body, code = build_health(request.app.state.service.repo, request.app.state.sync, request.app.state.settings.ui_poll_seconds)
+    return JSONResponse(body, status_code=code)
+
+
+@router.get("/results/latest")
+def latest_result(request: Request):
+    from app.utils.constants import COLOR_DETAIL, size_of
+    rows = svc(request).results(limit=1, offset=0)["results"]
+    if not rows:
+        return {"available": False}
+    r = rows[0]
+    return {"available": True, **r, "colour": COLOR_DETAIL[r["number"]], "size": size_of(r["number"])}
+
+
+@router.get("/sync/status")
+def sync_status(request: Request):
+    return request.app.state.sync.status()
+
+
+@router.post("/sync/run", dependencies=[Depends(require_key)])
+async def sync_run(request: Request):
+    """Run one synchronisation now (the background loop does this automatically when SYNC_ENABLED=true)."""
+    await run_in_threadpool(request.app.state.sync.run_once)
+    return request.app.state.sync.status()
+
+
 @router.get("/data/stats")
 def data_stats(request: Request):
     return svc(request).data_stats()
