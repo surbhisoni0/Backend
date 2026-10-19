@@ -11,8 +11,9 @@ from app.database.base import Repository
 from app.prediction.engine import PredictionEngine
 from app.prediction.signal import evaluate_signal
 from app.services import analysis
+from app.services.colour_analysis import colour_analysis
 from app.services.data_service import clean_rows, parse_csv, parse_paste
-from app.services.errors import ServiceError, ValidationFailure
+from app.services.errors import ServiceError
 from app.utils.constants import BASELINES, METRICS, color_group_of, size_of, COLOR_NAMES
 from app.utils.stats import rate_stats
 
@@ -93,12 +94,8 @@ class PredictorService:
                     "live_performance": self.live_metrics()}
 
     def import_rows(self, rows: list) -> dict:
-        if not rows:
-            raise ValidationFailure("nothing to import: no rows provided")
         with self.lock:
             stored = self._store(rows)
-            if not stored:
-                raise ValidationFailure("nothing to import: no valid rows provided")
             self._resolve(stored[0])                       # a pending prediction can only target the first new round
             self.repo.expire_pending_except(stored[-1]["seq"] + 1)
             nxt = self._next_prediction()
@@ -145,7 +142,11 @@ class PredictorService:
                 "color_hit": o["color_hit"] if o else None, "result": result}
 
     def data_stats(self) -> dict:
-        return analysis.analyze(self._numbers(), self.repo.get_meta())
+        nums = self._numbers()
+        out = analysis.analyze(nums, self.repo.get_meta())
+        if out.get("counts"):
+            out["colour"] = colour_analysis(nums)
+        return out
 
     def performance(self) -> dict:
         outs = self.repo.all_outcomes()
