@@ -16,7 +16,7 @@ from app.services.colour_analysis import colour_analysis
 from app.services.size_analysis import size_analysis
 from app.services.data_service import clean_rows, parse_csv, parse_paste
 from app.services.errors import ServiceError, ValidationFailure
-from app.timing import ClockConfig, countdown, iso, next_period_id, verify_schedule
+from app.timing import ClockConfig, assumed_countdown, countdown, iso, next_period_id, verify_schedule
 from app.utils.constants import BASELINES, METRICS, color_group_of, size_of, COLOR_NAMES
 from app.utils.stats import rate_stats
 
@@ -133,12 +133,17 @@ class PredictorService:
         rows, total = self.repo.list_results(MAX_CLOCK_ROWS, 0)
         base = {"server_time": iso(now), "server_epoch_ms": int(now * 1000), "total_results": total}
         if not rows:
+            cd = {"state": "no_data", "round_ends_at": None, "seconds_remaining": None,
+                  "overdue_seconds": None, "rounds_ended_since_confirmed": None, "reason": None}
+            if self.clock_cfg.assumed:
+                cd = assumed_countdown(now, self.clock_cfg); cd["round_ends_at"] = iso(cd["round_ends_at"])
             return {**base, "schedule": {"verified": False, "reason": "No confirmed results stored yet."}, "latest_confirmed": None,
-                    "next_round": None, "countdown": {"state": "no_data", "round_ends_at": None, "seconds_remaining": None,
-                                                      "overdue_seconds": None, "rounds_ended_since_confirmed": None, "reason": None}}
+                    "next_round": None, "countdown": cd}
         latest = rows[0]
         sched = verify_schedule(rows, self.clock_cfg)
         cd = countdown(sched, now, self.clock_cfg)
+        if self.clock_cfg.assumed and cd["state"] == "unverified":          # opt-in fallback; a verified schedule always wins
+            cd = {**assumed_countdown(now, self.clock_cfg), "reason": (sched.get("reason") or "") + " Showing an ASSUMED schedule instead."}
         cd["round_ends_at"] = iso(cd["round_ends_at"])
         nxt_id = next_period_id(latest.get("period_id"))
         sched_public = {k: v for k, v in sched.items() if k not in ("anchor_epoch",)}
