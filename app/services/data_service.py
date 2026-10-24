@@ -2,7 +2,7 @@
 import csv
 import io
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from app.services.errors import ValidationFailure
 
@@ -36,14 +36,23 @@ def clean_period(v) -> Optional[str]:
 
 
 def clean_timestamp(v) -> Optional[str]:
+    """ISO-8601 (with or without offset) or epoch seconds/milliseconds -> normalised ISO-8601. Epochs become UTC."""
     if v is None or str(v).strip() == "":
         return None
     if isinstance(v, datetime):
         return v.isoformat()
+    s = str(v).strip()
+    if not isinstance(v, bool) and re.fullmatch(r"\d{9,}(\.\d+)?", s):          # epoch seconds (10 digits) or milliseconds (13)
+        x = float(s)
+        x = x / 1000.0 if x > 1e11 else x
+        try:
+            return datetime.fromtimestamp(x, timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            raise ValidationFailure(f"invalid timestamp {v!r}: epoch out of range")
     try:
-        return datetime.fromisoformat(str(v).strip().replace("Z", "+00:00")).isoformat()
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).isoformat()
     except ValueError:
-        raise ValidationFailure(f"invalid timestamp {v!r}: use ISO-8601")
+        raise ValidationFailure(f"invalid timestamp {v!r}: use ISO-8601 or epoch seconds/milliseconds")
 
 
 def clean_rows(rows: list, last_period: Optional[str], period_exists=lambda p: False) -> list:

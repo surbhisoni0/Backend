@@ -20,25 +20,39 @@ from app.sync.sources import HttpJsonSource
 
 logging.basicConfig(level=get_settings().log_level, format="%(asctime)s level=%(levelname)s logger=%(name)s msg=%(message)s")
 log = logging.getLogger("wingo")
-FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
+ROOT = Path(__file__).resolve().parents[1]
+FRONTEND = ROOT.parent / "frontend"
+
+
+def _find_seed(name: str):
+    p = Path(name)
+    for c in (p, ROOT / p, ROOT / "data" / p.name, ROOT.parent / "data" / p.name):     # works from any working directory
+        if c.is_file():
+            return c
+    return None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     s = get_settings()
     repo = create_repository(s.database_url); repo.init()
-    service = PredictorService(repo, PredictionEngine(refit_every=s.refit_every), s.min_history, s.min_validation_n)
+    service = PredictorService(repo, PredictionEngine(refit_every=s.refit_every), s.min_history, s.min_validation_n,
+                               clock_cfg=s.clock_config())
     app.state.settings, app.state.service = s, service
-    seed = Path(s.seed_csv)
-    if s.auto_seed and repo.last_result() is None and seed.exists():
-        log.info("seeding from %s", seed)
-        service.import_csv(seed.read_text(encoding="utf-8"))
+    seed = _find_seed(s.seed_csv)
+    if s.auto_seed and repo.last_result() is None:
+        if seed:
+            log.info("seeding from %s", seed)
+            service.import_csv(seed.read_text(encoding="utf-8"))
+        else:
+            log.warning("AUTO_SEED is on but %s was not found; the database stays empty", s.seed_csv)
     last = repo.last_result()
     if s.auto_backtest and last and last["seq"] > s.min_history + 50 and repo.latest_backtest() is None:
         threading.Thread(target=service.run_backtest, daemon=True).start()     # ~1-2 min, results appear when done
     source = HttpJsonSource(s.sync_source_url, s.sync_list_path, s.sync_period_field, s.sync_number_field, s.sync_time_field,
                             json.loads(s.sync_headers_json) if s.sync_headers_json else {}, respect_robots=s.sync_respect_robots)
-    sync = SyncService(service, source, s.sync_enabled, s.sync_interval, stale_after=s.sync_stale_after, allow_gaps=s.sync_allow_gaps, start_after=s.sync_start_after_period)
+    sync = SyncService(service, source, s.sync_enabled, s.sync_interval, stale_after=s.sync_stale_after, allow_gaps=s.sync_allow_gaps, start_after=s.sync_start_after_period,
+                       fast_interval=s.sync_fast_interval)
     app.state.sync = sync
     task = asyncio.create_task(sync.run_forever()) if s.sync_enabled else None     # no browser needed: runs on the server
     yield
@@ -50,6 +64,15 @@ app = FastAPI(title="WinGo Analysis Platform", version=ENGINE_VERSION, lifespan=
               description="Research/analysis tool. Statistical candidates only - no guarantees, no betting functionality.")
 app.add_middleware(CORSMiddleware, allow_origins=list(get_settings().allowed_origins), allow_methods=["GET", "POST"],
                    allow_headers=["Content-Type", "X-API-Key"])
+
+
+@app.middleware("http")
+async def no_store_for_api(request: Request, call_next):
+    """Live data must never be served from a browser/CDN/proxy cache as if it were current."""
+    resp = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.exception_handler(ServiceError)

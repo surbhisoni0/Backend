@@ -74,6 +74,12 @@ def latest_result(request: Request):
     return {"available": True, **r, "colour": COLOR_DETAIL[r["number"]], "size": size_of(r["number"])}
 
 
+@router.get("/clock")
+def clock(request: Request):
+    """Server time + verified round timing. Light enough to poll every few seconds; contains no model output."""
+    return svc(request).clock()
+
+
 @router.get("/sync/status")
 def sync_status(request: Request):
     return request.app.state.sync.status()

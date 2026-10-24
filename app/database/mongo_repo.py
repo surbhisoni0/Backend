@@ -92,6 +92,7 @@ class MongoRepository(Repository):
     # ------------------------------------------------------------ predictions
     _PRED_KEYS = ("target_seq", "target_period", "engine_version", "n_history", "top1", "top3", "size", "color",
                   "signal", "ranking", "model_tops", "model_scores")
+    _OPTIONAL_KEYS = ("color_probs", "size_probs")
 
     @staticmethod
     def _pred(d: dict, o: Optional[dict]) -> dict:
@@ -105,7 +106,7 @@ class MongoRepository(Repository):
 
     def save_prediction(self, pred):
         pid = self._next_id("predictions")
-        doc = {"_id": pid, **_clean({k: pred[k] for k in self._PRED_KEYS}), "status": "pending", "created_at": _now()}
+        doc = {"_id": pid, **_clean({k: pred[k] for k in self._PRED_KEYS + tuple(k for k in self._OPTIONAL_KEYS if k in pred)}), "status": "pending", "created_at": _now()}
         self.db.predictions.insert_one(doc)
         return pid
 

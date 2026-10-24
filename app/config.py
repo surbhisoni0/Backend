@@ -23,7 +23,7 @@ class Settings:
     admin_api_key: str = os.getenv("ADMIN_API_KEY", "")
     allowed_origins: tuple = tuple(o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",") if o.strip())
     auto_seed: bool = os.getenv("AUTO_SEED", "true").lower() == "true"
-    seed_csv: str = os.getenv("SEED_CSV", "../data/wingo_transcribed.csv")
+    seed_csv: str = os.getenv("SEED_CSV", "data/wingo_transcribed.csv")
     auto_backtest: bool = os.getenv("AUTO_BACKTEST", "true").lower() == "true"
     refit_every: int = int(os.getenv("MODEL_REFIT_EVERY", "10"))
     min_history: int = int(os.getenv("MIN_HISTORY", "100"))
@@ -43,6 +43,19 @@ class Settings:
     sync_respect_robots: bool = os.getenv("SYNC_RESPECT_ROBOTS", "true").lower() == "true"
     sync_allow_gaps: bool = os.getenv("SYNC_ALLOW_GAPS", "false").lower() == "true"
     sync_start_after_period: str = os.getenv("SYNC_START_AFTER_PERIOD", "")
+    sync_fast_interval: float = max(3.0, float(os.getenv("SYNC_FAST_INTERVAL_SECONDS", "5")))   # only while a result is overdue
+    # period clock: the schedule is VERIFIED from stored timestamps, never assumed (see app/timing.py)
+    period_seconds: int = int(os.getenv("PERIOD_SECONDS", "60"))
+    source_timezone: str = os.getenv("SOURCE_TIMEZONE", "UTC")             # zone of timestamps that carry no UTC offset
+    timestamp_means: str = os.getenv("TIMESTAMP_MEANS", "end").lower()     # "end" = draw time, "start" = round start
+    clock_tolerance_seconds: float = float(os.getenv("CLOCK_TOLERANCE_SECONDS", "5"))
+    clock_min_samples: int = int(os.getenv("CLOCK_MIN_SAMPLES", "5"))
+    late_grace_seconds: float = float(os.getenv("LATE_GRACE_SECONDS", "20"))
+
+    def clock_config(self):
+        from app.timing import ClockConfig
+        return ClockConfig(self.period_seconds, self.source_timezone, self.timestamp_means, self.clock_tolerance_seconds,
+                           self.clock_min_samples, self.late_grace_seconds)
 
 
 def get_settings() -> Settings:

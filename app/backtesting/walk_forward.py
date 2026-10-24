@@ -2,6 +2,9 @@
 import time
 from typing import Callable, Optional
 import numpy as np
+from app.backtesting.colour_eval import colour_eval, size_eval
+from app.prediction import size as sz
+from app.prediction.colour import colour_probs
 from app.prediction.engine import ALL_MODELS, PredictionEngine, consensus, decide
 from app.utils.constants import BASELINES, COLOR_GROUP, METRICS
 from app.utils.stats import rate_stats
@@ -24,7 +27,7 @@ def run_walk_forward(seq, start: int = 100, refit_every: int = 10, use_ml: bool 
         raise ValueError(f"need more than {start + 1} results to backtest")
     eng = PredictionEngine(refit_every=refit_every, use_ml=use_ml)
     names, hits, rows = None, {}, []
-    logloss = {}
+    logloss, cprobs, cgroups, sprobs, sgroups = {}, [], [], [], []
     for t in range(start, n_total):
         actual = int(seq[t])
         scores = eng.model_scores(seq[:t])
@@ -37,7 +40,9 @@ def run_walk_forward(seq, start: int = 100, refit_every: int = 10, use_ml: bool 
                 hits[k][m].append(bool(h))
             pp = np.clip(p / p.sum(), 1e-4, 1)
             logloss[k].append(-float(np.log(pp[actual])))
+        cprobs.append(colour_probs(scores)); cgroups.append(int(COLOR_GROUP[actual]))
         cons = consensus(scores); d = decide(cons)
+        sp = sz.size_probs(scores); d["size"] = sz.size_pick(sp); sprobs.append(sp); sgroups.append(int(actual >= 5))
         ch = (d["top1"] == actual, actual in d["top3"], d["size"] == ("Big" if actual >= 5 else "Small"),
               d["color_group"] == COLOR_GROUP[actual])
         for m, h in zip(METRICS, ch):
@@ -48,6 +53,8 @@ def run_walk_forward(seq, start: int = 100, refit_every: int = 10, use_ml: bool 
         if progress and (t - start) % 25 == 0:
             progress(t - start, n_total - start)
     summary = summarize(hits, logloss, n_total, start, refit_every)
+    summary["colour_eval"] = colour_eval(np.array(cprobs), cgroups)
+    summary["size_eval"] = size_eval(np.array(sprobs), sgroups)
     return {"summary": summary, "rows": rows}
 
 

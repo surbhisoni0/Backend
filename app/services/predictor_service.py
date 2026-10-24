@@ -4,7 +4,8 @@ No betting/deposit/withdrawal/auto-bet functionality exists anywhere in this pro
 records data, produces statistical candidates and measures how they perform.
 """
 import threading
-from typing import Optional
+import time
+from typing import Callable, Optional
 import numpy as np
 from app.backtesting.walk_forward import run_walk_forward
 from app.database.base import Repository
@@ -12,18 +13,23 @@ from app.prediction.engine import PredictionEngine
 from app.prediction.signal import evaluate_signal
 from app.services import analysis
 from app.services.colour_analysis import colour_analysis
+from app.services.size_analysis import size_analysis
 from app.services.data_service import clean_rows, parse_csv, parse_paste
-from app.services.errors import ServiceError
+from app.services.errors import ServiceError, ValidationFailure
+from app.timing import ClockConfig, countdown, iso, next_period_id, verify_schedule
 from app.utils.constants import BASELINES, METRICS, color_group_of, size_of, COLOR_NAMES
 from app.utils.stats import rate_stats
 
+MAX_CLOCK_ROWS = 40
 DISCLAIMER = ("Model-generated statistical candidates, not predictions of a guaranteed outcome. Walk-forward validation on "
               "historical data has shown no reliable advantage over random guessing. Nothing here places bets.")
 
 
 class PredictorService:
-    def __init__(self, repo: Repository, engine: PredictionEngine, min_history: int = 100, min_validation_n: int = 300):
+    def __init__(self, repo: Repository, engine: PredictionEngine, min_history: int = 100, min_validation_n: int = 300,
+                 clock_cfg: Optional[ClockConfig] = None, now_fn: Callable[[], float] = time.time):
         self.repo, self.engine = repo, engine
+        self.clock_cfg, self.now_fn = clock_cfg or ClockConfig(), now_fn
         self.min_history, self.min_validation_n = min_history, min_validation_n
         self.lock = threading.RLock()
         self.backtest_state = {"status": "idle", "progress": 0, "total": 0, "error": None}
@@ -80,7 +86,7 @@ class PredictorService:
             return existing
         p = self.engine.predict(self._numbers())
         lp = last["period_id"]
-        pred = {**p, "target_seq": target, "target_period": str(int(lp) + 1) if lp and lp.isdigit() else None,
+        pred = {**p, "target_seq": target, "target_period": next_period_id(lp),
                 "signal": self.current_signal()}
         self.repo.save_prediction(pred)
         return self.repo.get_prediction_by_target(target)
@@ -94,8 +100,12 @@ class PredictorService:
                     "live_performance": self.live_metrics()}
 
     def import_rows(self, rows: list) -> dict:
+        if not rows:
+            raise ValidationFailure("nothing to import: no rows provided")
         with self.lock:
             stored = self._store(rows)
+            if not stored:
+                raise ValidationFailure("nothing to import: no valid rows provided")
             self._resolve(stored[0])                       # a pending prediction can only target the first new round
             self.repo.expire_pending_except(stored[-1]["seq"] + 1)
             nxt = self._next_prediction()
@@ -112,16 +122,47 @@ class PredictorService:
     def _public(p: Optional[dict]) -> Optional[dict]:
         if p is None:
             return None
-        return {**p, "disclaimer": DISCLAIMER}
+        tp = p.get("target_period")
+        return {**p, "target_label": tp or f"#{p['target_seq']}", "target_id_kind": "period_id" if tp else "sequence",
+                "disclaimer": DISCLAIMER}
+
+    def clock(self, now: Optional[float] = None) -> dict:
+        """Server-authoritative timing. Cheap (no model work): safe to poll. The countdown exists ONLY if the schedule is
+        verified from stored timestamps; otherwise `countdown.state` is 'unverified' and says why."""
+        now = self.now_fn() if now is None else now
+        rows, total = self.repo.list_results(MAX_CLOCK_ROWS, 0)
+        base = {"server_time": iso(now), "server_epoch_ms": int(now * 1000), "total_results": total}
+        if not rows:
+            return {**base, "schedule": {"verified": False, "reason": "No confirmed results stored yet."}, "latest_confirmed": None,
+                    "next_round": None, "countdown": {"state": "no_data", "round_ends_at": None, "seconds_remaining": None,
+                                                      "overdue_seconds": None, "rounds_ended_since_confirmed": None, "reason": None}}
+        latest = rows[0]
+        sched = verify_schedule(rows, self.clock_cfg)
+        cd = countdown(sched, now, self.clock_cfg)
+        cd["round_ends_at"] = iso(cd["round_ends_at"])
+        nxt_id = next_period_id(latest.get("period_id"))
+        sched_public = {k: v for k, v in sched.items() if k not in ("anchor_epoch",)}
+        sched_public["anchor_time"] = iso(sched["anchor_epoch"])
+        sched_public["late_grace_seconds"] = self.clock_cfg.late_grace_seconds
+        return {**base, "schedule": sched_public,
+                "latest_confirmed": {**latest, "colour": COLOR_NAMES[color_group_of(latest["number"])], "size": size_of(latest["number"])},
+                "next_round": {"period_id": nxt_id, "seq": latest["seq"] + 1, "label": nxt_id or f"#{latest['seq'] + 1}",
+                               "id_kind": "period_id" if nxt_id else "sequence"},
+                "countdown": cd}
 
     def next_prediction(self) -> dict:
         with self.lock:
             p = self._next_prediction()
         last = self.repo.last_result()
+        timing = self.clock()
         if p is None:
             return {"available": False, "reason": f"Need at least {self.min_history} results (have {last['seq'] if last else 0}).",
-                    "disclaimer": DISCLAIMER}
-        return {"available": True, "latest_result": last, **self._public(p)}
+                    "timing": timing, "disclaimer": DISCLAIMER}
+        state = timing["countdown"]["state"]
+        # The estimate is bound to ONE round and is never regenerated or swapped. If that round has already ended while its
+        # result has not been confirmed yet, say so instead of presenting it as an estimate for a round still to come.
+        est = {"open": "open", "awaiting_result": "round_ended", "late": "round_ended"}.get(state, "timing_unverified")
+        return {"available": True, "latest_result": last, "estimate_state": est, "timing": timing, **self._public(p)}
 
     def results(self, limit=50, offset=0) -> dict:
         rows, total = self.repo.list_results(limit, offset)
@@ -134,7 +175,7 @@ class PredictorService:
     @staticmethod
     def _history_row(r: dict) -> dict:
         o = r.get("outcome")
-        result = "PENDING" if not o else ("HIT (Top-1)" if o["top1_hit"] else "Top-3 hit" if o["top3_hit"] else "MISS")
+        result = "PENDING" if not o else ("HIT" if o["bs_hit"] else "MISS")          # Big/Small is the target
         return {"target_seq": r["target_seq"], "round": r["target_period"] or f"#{r['target_seq']}", "created_at": r["created_at"],
                 "prediction": r["top1"], "top3": r["top3"], "size": r["size"], "color": r["color"],
                 "signal": (r.get("signal") or {}).get("label"), "actual": o["actual"] if o else None,
@@ -146,6 +187,7 @@ class PredictorService:
         out = analysis.analyze(nums, self.repo.get_meta())
         if out.get("counts"):
             out["colour"] = colour_analysis(nums)
+            out["size"] = size_analysis(nums)
         return out
 
     def performance(self) -> dict:

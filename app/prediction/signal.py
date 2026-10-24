@@ -18,7 +18,8 @@ LIVE_MIN_N = 100
 LABEL = {"strong": "Strong", "moderate": "Moderate", "weak": "Weak", "none": "NO STRONG SIGNAL"}
 
 
-def evaluate_signal(validation: Optional[dict], live: Optional[dict], min_n: int = 300, alpha: float = 0.05) -> dict:
+def evaluate_signal(validation: Optional[dict], live: Optional[dict], min_n: int = 300, alpha: float = 0.05,
+                    metrics: tuple = ("bs",)) -> dict:
     """validation: {'metrics': {metric: rate_stats}, 'K': int}; live: {metric: rate_stats} or None."""
     base = {"level": "none", "label": LABEL["none"], "reasons": [], "evidence": {}}
     if not validation or not validation.get("metrics"):
@@ -26,7 +27,7 @@ def evaluate_signal(validation: Optional[dict], live: Optional[dict], min_n: int
         return base
     K = max(1, int(validation.get("K", 4)))
     best_level, rank = "none", {"none": 0, "weak": 1, "moderate": 2, "strong": 3}
-    for m in METRICS:
+    for m in metrics:                          # default: Big/Small only; K below still counts every metric tested in the backtest
         s = validation["metrics"].get(m)
         if not s or s["n"] < min_n:
             base["reasons"].append(f"{m}: fewer than {min_n} validation predictions.")

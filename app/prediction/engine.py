@@ -6,6 +6,8 @@ walk-forward validation, never by the model itself.
 """
 import numpy as np
 from app.prediction import baselines
+from app.prediction import size as sz
+from app.prediction.colour import as_dict, colour_probs
 from app.prediction.features import feats
 from app.prediction.ml_models import make_models
 from app.utils.constants import COLOR_GROUP, COLOR_NAMES
@@ -84,9 +86,12 @@ class PredictionEngine:
         scores = self.model_scores(seq)
         cons = consensus(scores)
         d = decide(cons)
+        d["size"] = sz.size_pick(sz.size_probs(scores))
         return {
             "engine_version": ENGINE_VERSION, "n_history": int(len(seq)),
             "top1": d["top1"], "top3": d["top3"], "size": d["size"], "color": d["color"], "color_group": d["color_group"],
+            "color_probs": as_dict(colour_probs(scores)),
+            "size_probs": sz.size_dict(sz.size_probs(scores)),
             "ranking": [{"number": n, "score": round(float(cons[n]), 4)} for n in d["order"]],
             "model_tops": {k: [int(x) for x in np.argsort(-p, kind="stable")[:3]] for k, p in scores.items()},
             "model_scores": {k: [round(float(x), 4) for x in p] for k, p in scores.items()},
