@@ -24,6 +24,8 @@ class ClockConfig:
     tolerance_seconds: float = 5.0    # allowed jitter between timestamps and the ideal schedule
     min_samples: int = 5              # consecutive rounds needed before the schedule counts as verified
     late_grace_seconds: float = 20.0  # after the boundary: "awaiting result" for this long, then "late"
+    assumed: bool = False             # opt-in: when the schedule cannot be VERIFIED, count down to an ASSUMED boundary instead
+    assumed_offset_seconds: float = 0.0   # rounds are assumed to end at (k * period + offset) seconds of the UTC epoch
 
     def __post_init__(self):
         if self.period_seconds < 5:
@@ -126,6 +128,17 @@ def countdown(schedule: dict, now: float, cfg: ClockConfig) -> dict:
     base.update(round_ends_at=ends_at, seconds_remaining=0.0, overdue_seconds=overdue)
     base["state"] = "awaiting_result" if (ended == 1 and overdue <= cfg.late_grace_seconds) else "late"
     return base
+
+
+def assumed_countdown(now: float, cfg: ClockConfig) -> dict:
+    """OPT-IN fallback (ASSUMED_SCHEDULE=true). Nothing verified this schedule: it only says rounds are assumed to end every
+    `period_seconds`, aligned to the UTC epoch plus `assumed_offset_seconds`. The state is 'assumed', never 'open', so the UI can
+    never present it as verified. It does not know about results and never advances a period id."""
+    P, off = float(cfg.period_seconds), float(cfg.assumed_offset_seconds)
+    ends_at = (int((now - off) // P) + 1) * P + off
+    return {"state": "assumed", "round_ends_at": ends_at, "seconds_remaining": max(0.0, ends_at - now), "period_seconds": cfg.period_seconds,
+            "overdue_seconds": None, "rounds_ended_since_confirmed": None,
+            "reason": "Assumed schedule (not verified): the timer counts to every full period on the clock, not to your data source."}
 
 
 def iso(epoch: Optional[float]) -> Optional[str]:
