@@ -51,11 +51,13 @@ class Settings:
     clock_tolerance_seconds: float = float(os.getenv("CLOCK_TOLERANCE_SECONDS", "5"))
     clock_min_samples: int = int(os.getenv("CLOCK_MIN_SAMPLES", "5"))
     late_grace_seconds: float = float(os.getenv("LATE_GRACE_SECONDS", "20"))
+    assumed_schedule: bool = os.getenv("ASSUMED_SCHEDULE", "false").lower() == "true"     # opt-in fallback countdown, always labelled "assumed"
+    assumed_offset_seconds: float = float(os.getenv("ASSUMED_OFFSET_SECONDS", "0"))
 
     def clock_config(self):
         from app.timing import ClockConfig
         return ClockConfig(self.period_seconds, self.source_timezone, self.timestamp_means, self.clock_tolerance_seconds,
-                           self.clock_min_samples, self.late_grace_seconds)
+                           self.clock_min_samples, self.late_grace_seconds, self.assumed_schedule, self.assumed_offset_seconds)
 
 
 def get_settings() -> Settings:
