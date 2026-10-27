@@ -226,10 +226,8 @@ class PredictorService:
             res = run_walk_forward(seq, start=self.min_history, refit_every=self.engine.refit_every, use_ml=use_ml, progress=prog)
             self.repo.save_backtest(res["summary"], res["rows"])
             self.backtest_state = {"status": "done", "progress": len(seq), "total": len(seq), "error": None}
-            with self.lock:                                   # refresh the signal on the pending prediction
-                last = self.repo.last_result()
-                if last:
-                    self.repo.expire_pending_except(-1)
+            with self.lock:                                   # a saved prediction is bound to its target and never regenerated;
+                if self.repo.last_result():                   # this only creates one if the target has none (idempotent)
                     self._next_prediction()
             return res["summary"]
         except Exception as e:                                # noqa: BLE001 - reported through state
